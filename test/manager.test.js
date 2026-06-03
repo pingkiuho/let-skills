@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import {
   addSkills,
   defaultAgentSelection,
+  findBrokenInstalls,
   initSkill,
   listAvailableAgents,
   listSkills,
@@ -160,8 +161,16 @@ test("sync repairs a deleted agent link", async () => {
 
   const target = path.join(process.env.HOME, ".codex/skills/project-guide");
   await unlink(target);
+  assert.deepEqual(await findBrokenInstalls(), [
+    {
+      skill: "project-guide",
+      agent: "codex",
+      target,
+    },
+  ]);
   await syncSkills();
 
+  assert.deepEqual(await findBrokenInstalls(), []);
   assert.match(await readFile(path.join(target, "SKILL.md"), "utf8"), /project-guide/);
 });
 
@@ -184,6 +193,33 @@ test("remove unlinks a skill and purge deletes its library copy", async () => {
   await removeSkills(["clean-up"], { purge: true });
 
   assert.deepEqual(await listSkills(), []);
+});
+
+test("remove clears a broken saved install without deleting the library copy", async () => {
+  const source = await makeSkill("repair-later");
+  await addSkills([source]);
+
+  const target = path.join(process.env.HOME, ".codex/skills/repair-later");
+  await unlink(target);
+
+  assert.deepEqual(await findBrokenInstalls(), [
+    {
+      skill: "repair-later",
+      agent: "codex",
+      target,
+    },
+  ]);
+
+  await removeSkills(["repair-later"]);
+
+  assert.deepEqual(await findBrokenInstalls(), []);
+  assert.deepEqual(await listSkills(), [
+    {
+      name: "repair-later",
+      description: "Test skill repair-later.",
+      agents: [],
+    },
+  ]);
 });
 
 test("remove refuses to delete an unmanaged agent folder", async () => {

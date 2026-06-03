@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   addSkills,
   defaultAgentSelection,
+  findBrokenInstalls,
   initSkill,
   installSkills,
   listAvailableAgents,
@@ -221,6 +222,26 @@ function formatKeyValueLines(rows) {
     ...Object.entries(row).map(([key, value]) => `${key.padEnd(keyWidth)}  ${value}`),
     ...(index < rows.length - 1 ? [""] : []),
   ]);
+}
+
+function formatBrokenInstallLines(installs, { limit = 6 } = {}) {
+  const shown = installs.slice(0, limit).map(({ skill, agent }) => `  - ${skill} (${agent})`);
+  if (installs.length > limit) {
+    shown.push(`  - and ${installs.length - limit} more`);
+  }
+  return shown;
+}
+
+function groupInstallsBySkill(installs) {
+  const grouped = new Map();
+
+  for (const { skill, agent } of installs) {
+    const agents = grouped.get(skill) || [];
+    agents.push(agent);
+    grouped.set(skill, agents);
+  }
+
+  return grouped;
 }
 
 function inspectSourceLocation(value) {
@@ -748,6 +769,97 @@ async function syncSkillsInteractively(input, output) {
   });
 }
 
+async function promptForBrokenInstallsInteractively(input, output) {
+  const brokenInstalls = await findBrokenInstalls();
+  if (brokenInstalls.length === 0) return;
+
+  const selection = await selectAgents({
+    welcome: [
+      `Welcome. Found ${brokenInstalls.length} broken saved agent link(s).`,
+      "",
+      "These installs are missing from the agent skills folders:",
+      ...formatBrokenInstallLines(brokenInstalls),
+    ].join("\n"),
+    title: "How would you like to handle them?",
+    choices: [
+      {
+        id: "repair-now",
+        name: "Repair now",
+        path: `Recreate ${brokenInstalls.length} missing link(s)`,
+      },
+      {
+        id: "remove-saved-installs",
+        name: "Remove saved installs",
+        path: `Forget ${brokenInstalls.length} missing install record(s)`,
+      },
+      {
+        id: "review-later",
+        name: "Review later",
+        path: "Open the home page without changing anything",
+      },
+    ],
+    showSkillSection: false,
+    singleSelection: true,
+    selectionNoun: "action",
+    escapeLabel: "review later",
+    escapeValue: BACK,
+    input,
+    output,
+  });
+
+  if (selection === BACK) return;
+  const [selected] = selection;
+  if (selected === "review-later") return;
+
+  try {
+    if (selected === "repair-now") {
+      const brokenKeys = new Set(
+        brokenInstalls.map(({ skill, agent }) => `${skill}\u0000${agent}`),
+      );
+      const repaired = (await syncSkills({})).filter(({ skill, agent }) =>
+        brokenKeys.has(`${skill}\u0000${agent}`)
+      );
+      await showNotice({
+        title: "Broken links repaired",
+        lines: [
+          `Repaired ${repaired.length} saved agent link(s).`,
+          "",
+          ...formatBrokenInstallLines(repaired),
+        ],
+        escapeLabel: "continue",
+        input,
+        output,
+      });
+      return;
+    }
+
+    const removed = [];
+    for (const [skill, agents] of groupInstallsBySkill(brokenInstalls)) {
+      removed.push(...await removeSkills([skill], { agents }));
+    }
+
+    await showNotice({
+      title: "Broken installs removed",
+      lines: [
+        `Removed ${removed.length} saved install record(s).`,
+        "",
+        ...formatBrokenInstallLines(removed),
+      ],
+      escapeLabel: "continue",
+      input,
+      output,
+    });
+  } catch (error) {
+    await showNotice({
+      title: "Could not update broken installs",
+      lines: [`Error: ${error.message}`],
+      escapeLabel: "continue",
+      input,
+      output,
+    });
+  }
+}
+
 async function installFromSourceInteractively(input, output) {
   const sources = await listSources();
   if (sources.length === 0) {
@@ -1009,6 +1121,8 @@ async function runSourceManager(input, output) {
 }
 
 async function runHomePage(input, output) {
+  await promptForBrokenInstallsInteractively(input, output);
+
   while (true) {
     const skills = await listSkills();
     const installedCount = skills.filter(({ agents }) => agents.length > 0).length;

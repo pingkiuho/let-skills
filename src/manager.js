@@ -367,6 +367,26 @@ export async function syncSkills({ force = false } = {}) {
   return synced;
 }
 
+export async function findBrokenInstalls() {
+  const manifest = await readManifest();
+  const broken = [];
+
+  for (const [skillName, agents] of Object.entries(manifest.installs)) {
+    const source = path.join(skillsDir(), skillName);
+    if (!(await exists(source))) continue;
+
+    for (const agent of agents) {
+      const target = path.join(agentSkillsDir(agent), skillName);
+      if (await entryExists(target)) continue;
+      broken.push({ skill: skillName, agent, target });
+    }
+  }
+
+  return broken.sort((left, right) =>
+    left.skill.localeCompare(right.skill) || left.agent.localeCompare(right.agent)
+  );
+}
+
 export async function listSkills() {
   const manifest = await readManifest();
   if (!(await exists(skillsDir()))) {
