@@ -2,6 +2,29 @@ import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * Resolve the real system home directory.
+ *
+ * When running inside a Hermes agent profile, $HOME is overridden to the
+ * profile home (e.g. ~/.hermes/profiles/salad/home).  os.homedir() respects
+ * $HOME, so it returns the profile home instead of the actual user home.
+ * This breaks agentSkillsDir() because skills live under the real home
+ * (~/.hermes/skills or ~/.hermes/profiles/<name>/skills), not under the
+ * profile home.
+ *
+ * Detecting the profile-home pattern and walking up to the real home
+ * avoids relying on os.userInfo() which breaks tests that override $HOME.
+ */
+function realHome() {
+  const home = os.homedir();
+  const marker = ".hermes/profiles/";
+  const idx = home.indexOf(marker);
+  if (idx !== -1 && home[idx + marker.length]) {
+    return home.slice(0, idx);
+  }
+  return home;
+}
+
 export const AGENTS = {
   codex: {
     name: "Codex",
@@ -32,7 +55,7 @@ export function agentSkillsDir(agent) {
     throw new Error(`Unknown agent "${agent}".`);
   }
 
-  return path.join(os.homedir(), AGENTS[agent].globalSkillsDir);
+  return path.join(realHome(), AGENTS[agent].globalSkillsDir);
 }
 
 function agentDetectDir(agent) {
