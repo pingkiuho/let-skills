@@ -77,8 +77,8 @@ test("formats aligned radio-style rows with agent skill paths", () => {
   ]);
 });
 
-test("shows a let-skills welcome banner", () => {
-  assert.match(BANNER.join("\n"), /let-skills/);
+test("shows a letskills welcome banner", () => {
+  assert.match(BANNER.join("\n"), /letskills/);
   assert.match(BANNER.join("\n"), /____/);
 });
 
