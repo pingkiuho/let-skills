@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import {
   access,
+  chmod,
   cp,
   lstat,
   mkdir,
@@ -13,7 +14,6 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   AGENTS,
@@ -22,12 +22,9 @@ import {
   detectAvailableAgents,
   listSupportedAgents,
 } from "./agents.js";
+import { storageDir } from "./storage.js";
 
 const MANIFEST_VERSION = 1;
-
-function storageDir() {
-  return process.env.SKILLS_MANAGER_HOME || path.join(os.homedir(), ".skills-manager");
-}
 
 function skillsDir() {
   return path.join(storageDir(), "skills");
@@ -68,6 +65,36 @@ async function linksTo(target, source) {
 
 function unique(values) {
   return [...new Set(values)];
+}
+
+async function walkSkillTree(root, visit) {
+  const stats = await lstat(root);
+  if (stats.isSymbolicLink()) return;
+
+  if (stats.isDirectory()) {
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      await walkSkillTree(path.join(root, entry.name), visit);
+    }
+  }
+
+  await visit(root, stats);
+}
+
+async function setSkillReadonly(skillPath) {
+  if (!(await entryExists(skillPath))) return;
+
+  await walkSkillTree(skillPath, async (entryPath, stats) => {
+    await chmod(entryPath, stats.mode & ~0o222);
+  });
+}
+
+async function setSkillWritable(skillPath) {
+  if (!(await entryExists(skillPath))) return;
+
+  await walkSkillTree(skillPath, async (entryPath, stats) => {
+    await chmod(entryPath, stats.mode | 0o200);
+  });
 }
 
 function assertSkillName(name) {
@@ -233,6 +260,7 @@ export async function addSkills(
 
     if (await exists(destination)) {
       if (force) {
+        await setSkillWritable(destination);
         await rm(destination, { recursive: true, force: true });
         await cp(sourcePath, destination, { recursive: true });
         await normalizeSkillFile(metadata.skillFile, destination);
@@ -247,6 +275,8 @@ export async function addSkills(
       added.push(metadata.name);
       skillSources[metadata.name] = repositorySource;
     }
+
+    await setSkillReadonly(destination);
 
     if (repositorySource) skillSources[metadata.name] = repositorySource;
     skillNames.push(metadata.name);
@@ -297,7 +327,7 @@ export async function installSkills(
   return installed;
 }
 
-export async function removeSkills(skillNames, { agents = [], purge = false } = {}) {
+export async function removeSkills(skillNames, { agents = [] } = {}) {
   if (skillNames.length === 0) {
     throw new Error("Provide at least one skill name.");
   }
@@ -314,12 +344,6 @@ export async function removeSkills(skillNames, { agents = [], purge = false } = 
       agent,
       target: path.join(agentSkillsDir(agent), skillName),
     }));
-
-    if (purge && remainingAgents.length > 0) {
-      throw new Error(
-        `Cannot purge "${skillName}" while it is installed to: ${remainingAgents.join(", ")}.`,
-      );
-    }
 
     const source = path.join(skillsDir(), skillName);
     for (const { target } of targets) {
@@ -341,11 +365,6 @@ export async function removeSkills(skillNames, { agents = [], purge = false } = 
       delete manifest.installs[skillName];
     } else {
       manifest.installs[skillName] = remainingAgents;
-    }
-
-    if (purge) {
-      await rm(path.join(skillsDir(), skillName), { recursive: true, force: true });
-      delete manifest.sources[skillName];
     }
   }
 

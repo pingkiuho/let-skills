@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -18,6 +30,26 @@ let sandbox;
 let previousHome;
 let previousManagerHome;
 
+async function makeWritable(root) {
+  let stats;
+  try {
+    stats = await lstat(root);
+  } catch {
+    return;
+  }
+
+  if (stats.isSymbolicLink()) return;
+
+  if (stats.isDirectory()) {
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      await makeWritable(path.join(root, entry.name));
+    }
+  }
+
+  await chmod(root, stats.mode | 0o200);
+}
+
 beforeEach(async () => {
   sandbox = await mkdtemp(path.join(os.tmpdir(), "let-skills-"));
   previousHome = process.env.HOME;
@@ -33,6 +65,7 @@ afterEach(async () => {
   if (previousManagerHome === undefined) delete process.env.SKILLS_MANAGER_HOME;
   else process.env.SKILLS_MANAGER_HOME = previousManagerHome;
 
+  await makeWritable(sandbox);
   await rm(sandbox, { recursive: true, force: true });
 });
 
@@ -51,7 +84,15 @@ test("adds a skill and links it to Codex by default", async () => {
   await addSkills([source]);
 
   const target = path.join(process.env.HOME, ".codex/skills/release-notes/SKILL.md");
+  const libraryCopy = path.join(process.env.SKILLS_MANAGER_HOME, "skills", "release-notes");
+  const libraryFile = path.join(libraryCopy, "SKILL.md");
   assert.match(await readFile(target, "utf8"), /Test skill release-notes/);
+  assert.equal((await stat(libraryCopy)).mode & 0o222, 0);
+  assert.equal((await stat(libraryFile)).mode & 0o222, 0);
+  await assert.rejects(
+    writeFile(target, "blocked"),
+    (error) => error?.code === "EACCES" || error?.code === "EPERM",
+  );
 
   assert.deepEqual(await listSkills(), [
     {
@@ -155,6 +196,23 @@ test("tracks repository provenance and clears it when a local force add replaces
   ]);
 });
 
+test("force add refreshes an existing read-only library copy", async () => {
+  const source = await makeSkill("refresh-me");
+  const skillFile = path.join(source, "SKILL.md");
+  await addSkills([source]);
+
+  await writeFile(
+    skillFile,
+    "---\nname: refresh-me\ndescription: Updated refresh-me skill.\n---\n\n# refresh-me\n",
+  );
+  await addSkills([source], { force: true });
+
+  const target = path.join(process.env.HOME, ".codex/skills/refresh-me/SKILL.md");
+  const libraryFile = path.join(process.env.SKILLS_MANAGER_HOME, "skills", "refresh-me", "SKILL.md");
+  assert.match(await readFile(target, "utf8"), /Updated refresh-me skill/);
+  assert.equal((await stat(libraryFile)).mode & 0o222, 0);
+});
+
 test("sync repairs a deleted agent link", async () => {
   const source = await makeSkill("project-guide");
   await addSkills([source]);
@@ -186,13 +244,26 @@ test("sync with force repairs a stale agent link", async () => {
   assert.match(await readFile(path.join(target, "SKILL.md"), "utf8"), /daily-plan/);
 });
 
-test("remove unlinks a skill and purge deletes its library copy", async () => {
+test("remove unlinks a skill and keeps its library copy", async () => {
   const source = await makeSkill("clean-up");
   await addSkills([source]);
 
-  await removeSkills(["clean-up"], { purge: true });
+  await removeSkills(["clean-up"]);
 
-  assert.deepEqual(await listSkills(), []);
+  assert.deepEqual(await listSkills(), [
+    {
+      name: "clean-up",
+      description: "Test skill clean-up.",
+      agents: [],
+    },
+  ]);
+  assert.match(
+    await readFile(
+      path.join(process.env.SKILLS_MANAGER_HOME, "skills", "clean-up", "SKILL.md"),
+      "utf8",
+    ),
+    /clean-up/,
+  );
 });
 
 test("remove clears a broken saved install without deleting the library copy", async () => {
@@ -236,18 +307,4 @@ test("remove refuses to delete an unmanaged agent folder", async () => {
     /Refusing to remove unmanaged target/,
   );
   assert.equal(await readFile(path.join(target, "notes.txt"), "utf8"), "keep me");
-});
-
-test("purge refuses to delete a library copy still installed to another agent", async () => {
-  const source = await makeSkill("shared-skill");
-  await addSkills([source], { agents: ["codex", "claude-code"] });
-
-  await assert.rejects(
-    removeSkills(["shared-skill"], { agents: ["codex"], purge: true }),
-    /Cannot purge "shared-skill" while it is installed to: claude-code/,
-  );
-  assert.match(
-    await readFile(path.join(process.env.HOME, ".codex/skills/shared-skill/SKILL.md"), "utf8"),
-    /shared-skill/,
-  );
 });

@@ -168,7 +168,7 @@ test("shows account token guidance and masks the token", () => {
       token: "secret-token",
     },
     cursor: 2,
-    credentialFile: "/home/test/.skills-manager/.credentials.json",
+    credentialFile: "/home/test/.let-skills/.credentials.json",
   });
 
   assert.match(lines.join("\n"), /read_repository/);
@@ -183,7 +183,7 @@ test("shows back navigation hints on account setup", () => {
       domain: "gitlab.example.com",
       token: "secret-token",
     },
-    credentialFile: "/home/test/.skills-manager/.credentials.json",
+    credentialFile: "/home/test/.let-skills/.credentials.json",
     escapeLabel: "back",
   });
 

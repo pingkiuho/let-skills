@@ -11,18 +11,14 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { CLI_COMMAND } from "./branding.js";
+import { storageDir } from "./storage.js";
 
 const SOURCES_VERSION = 2;
 const CREDENTIALS_VERSION = 2;
-
-function storageDir() {
-  return process.env.SKILLS_MANAGER_HOME || path.join(os.homedir(), ".skills-manager");
-}
 
 function sourcesDir() {
   return path.join(storageDir(), "sources");

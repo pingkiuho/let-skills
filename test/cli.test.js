@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -12,6 +12,26 @@ let originalTable;
 let originalLog;
 let rows;
 let logs;
+
+async function makeWritable(root) {
+  let stats;
+  try {
+    stats = await lstat(root);
+  } catch {
+    return;
+  }
+
+  if (stats.isSymbolicLink()) return;
+
+  if (stats.isDirectory()) {
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      await makeWritable(path.join(root, entry.name));
+    }
+  }
+
+  await chmod(root, stats.mode | 0o200);
+}
 
 beforeEach(async () => {
   sandbox = await mkdtemp(path.join(os.tmpdir(), "let-skills-cli-"));
@@ -38,6 +58,7 @@ afterEach(async () => {
   else process.env.HOME = previousHome;
   if (previousManagerHome === undefined) delete process.env.SKILLS_MANAGER_HOME;
   else process.env.SKILLS_MANAGER_HOME = previousManagerHome;
+  await makeWritable(sandbox);
   await rm(sandbox, { recursive: true, force: true });
 });
 
@@ -107,4 +128,11 @@ test("detects Hermes from profile skills directories in non-interactive mode", a
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0][0].agent, "hermes");
+});
+
+test("rejects the removed purge option", async () => {
+  await assert.rejects(
+    run(["remove", "demo-skill", "--purge"]),
+    /Unknown option "--purge"/,
+  );
 });

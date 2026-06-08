@@ -7,8 +7,9 @@ The primary launch command is `letskills`. The older `let-skills` name stays ava
 It is inspired by [`vercel-labs/skills`](https://github.com/vercel-labs/skills), but intentionally keeps a narrower scope:
 
 - local skill folders plus reusable repository or local-directory sources
-- one canonical personal library at `~/.skills-manager/skills`
+- one canonical personal library at `~/.let-skills/skills`
 - symlink installs so every agent sees the same copy
+- managed library copies are locked read-only after install or update
 - a small manifest so broken links can be repaired with `sync`
 - no public registry, telemetry, or update checker
 
@@ -54,8 +55,8 @@ letskills update
 # Choose which recorded agent installs to remove
 letskills remove my-workflow
 
-# Uninstall and delete the library copy
-letskills remove my-workflow --purge
+# Uninstall the skill from its installed agents
+letskills remove my-workflow
 ```
 
 ## Commands
@@ -67,8 +68,8 @@ letskills add <local-skill-folder...> [-a, --agent <agent...>] [--force] [--no-i
 letskills add --source <source-name>
 letskills install <skill...> [-a, --agent <agent...>] [--force]
 letskills list
-letskills remove <skill...> [-a, --agent <agent...>] [--purge] [--no-interactive]
-letskills remove --source <source-name> [--purge]
+letskills remove <skill...> [-a, --agent <agent...>] [--no-interactive]
+letskills remove --source <source-name>
 letskills update
 letskills sync [--force]
 letskills agents
@@ -91,6 +92,8 @@ Running `letskills` with no arguments opens the home page, which links to the ma
 For scripts and CI, pass `--agent` or `--no-interactive`. In a terminal, the interactive agent selector only shows detected agents. Non-interactive `add` defaults to the detected Codex agent when available, otherwise the first detected supported agent, and falls back to `codex` if no supported agent is detected yet. Non-interactive `remove` uninstalls from every recorded agent. Use `--agent all` to target every supported agent explicitly.
 
 Running `add` again for a skill already in your personal library reuses the saved copy and installs any missing agent links. Pass `--force` when you want to replace the saved library copy with the local folder contents.
+
+Managed skills in the personal library are automatically set to read-only after `add` and `update`. `letskills` temporarily unlocks them when you run management operations such as `add --force`.
 
 ## Sources
 
@@ -126,10 +129,10 @@ After choosing an account, enter the local source name and HTTPS repository URL.
 Accounts are stored in:
 
 ```text
-~/.skills-manager/.credentials.json
+~/.let-skills/.credentials.json
 ```
 
-The file is hidden and written with mode `0600`. Named accounts support separate credentials for `github.com`, `gitlab.com`, and self-hosted domains such as `gitlab.example.com`, including multiple accounts on the same domain. Repository sources are cloned under `~/.skills-manager/sources`.
+The file is hidden and written with mode `0600`. Named accounts support separate credentials for `github.com`, `gitlab.com`, and self-hosted domains such as `gitlab.example.com`, including multiple accounts on the same domain. Repository sources are cloned under `~/.let-skills/sources`.
 
 To add a local directory source without cloning anything:
 
@@ -153,7 +156,7 @@ To uninstall skills from a configured source:
 letskills remove --source team-skills
 ```
 
-The TUI only lists skills from that source which currently have recorded agent installs. Choose one or more skills, then choose which agent installs to remove. Add `--purge` to delete their personal library copies after uninstalling.
+The TUI only lists skills from that source which currently have recorded agent installs. Choose one or more skills, then choose which agent installs to remove.
 
 Useful source commands:
 
@@ -190,4 +193,6 @@ Run `letskills update` to refresh every configured source used by your currently
 
 ## Environment
 
-Set `SKILLS_MANAGER_HOME` to override the library and manifest location. This is useful for testing or keeping the personal library somewhere other than `~/.skills-manager`.
+Set `SKILLS_MANAGER_HOME` to override the library and manifest location. This is useful for testing or keeping the personal library somewhere other than `~/.let-skills`.
+
+By default, new installs use `~/.let-skills`. Existing setups under `~/.skills-manager` are still detected automatically until you move them.

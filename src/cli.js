@@ -37,6 +37,7 @@ import {
   updateSource,
 } from "./sources.js";
 import { CLI_COMMAND, CLI_DISPLAY_NAME, CLI_HOME_TITLE } from "./branding.js";
+import { STORAGE_DIRNAME } from "./storage.js";
 import { updateInstalledSkills } from "./updater.js";
 import { getCliVersion, updateCli } from "./version.js";
 
@@ -49,8 +50,8 @@ Usage:
   ${CLI_COMMAND} add --source <source-name>
   ${CLI_COMMAND} install <skill...> [-a, --agent <agent...>] [--force]
   ${CLI_COMMAND} list
-  ${CLI_COMMAND} remove <skill...> [-a, --agent <agent...>] [--purge] [--no-interactive]
-  ${CLI_COMMAND} remove --source <source-name> [--purge]
+  ${CLI_COMMAND} remove <skill...> [-a, --agent <agent...>] [--no-interactive]
+  ${CLI_COMMAND} remove --source <source-name>
   ${CLI_COMMAND} update
   ${CLI_COMMAND} sync [--force]
   ${CLI_COMMAND} agents
@@ -70,7 +71,7 @@ Notes:
   In a terminal, add and remove show an interactive agent selector for detected agents.
   Pass "--no-interactive" to skip prompts. The default add target is the detected Codex agent when available, otherwise the first detected supported agent, falling back to codex.
   Pass "--agent all" to target every supported agent.
-  Personal copies live in ~/.skills-manager/skills by default.
+  Personal copies live in ~/${STORAGE_DIRNAME}/skills by default.
   "${CLI_COMMAND} version update" updates this checkout with "git pull --ff-only".
 `;
 
@@ -111,8 +112,6 @@ function parseArguments(args) {
       index += 1;
     } else if (argument === "--force") {
       options.force = true;
-    } else if (argument === "--purge") {
-      options.purge = true;
     } else if (argument === "--no-interactive") {
       options.interactive = false;
     } else if (argument.startsWith("-")) {
