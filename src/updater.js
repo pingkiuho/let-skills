@@ -1,4 +1,4 @@
-import { addSkills, listSkills } from "./manager.js";
+import { listSkills, syncSkills } from "./manager.js";
 import {
   discoverSourceSkills,
   listSources,
@@ -6,10 +6,10 @@ import {
 } from "./sources.js";
 
 export async function updateInstalledSkills({
-  addSkillsCommand = addSkills,
   discoverSourceSkillsCommand = discoverSourceSkills,
   listSkillsCommand = listSkills,
   listSourcesCommand = listSources,
+  syncSkillsCommand = syncSkills,
   updateSourceCommand = updateSource,
 } = {}) {
   const installedSkills = (await listSkillsCommand())
@@ -68,15 +68,15 @@ export async function updateInstalledSkills({
       continue;
     }
 
-    await addSkillsCommand([discovered.path], {
-      agents: skill.agents,
-      force: true,
-      source: skill.source,
-    });
     updatedSkills.push({
       skill: skill.name,
       source: skill.source,
+      path: discovered.path,
     });
+  }
+
+  if (updatedSkills.length > 0) {
+    await syncSkillsCommand({});
   }
 
   return { updatedSources, updatedSkills, skippedSkills };

@@ -14,6 +14,7 @@ import {
   listSources,
   parseRepositoryUrl,
   parseSourceLocation,
+  pushSourceChanges,
   removeAccount,
   removeSource,
   saveAccount,
@@ -164,6 +165,59 @@ test("does not use a saved account when updating an explicitly public source", a
   });
 
   assert.equal(calls[0].options.credential, undefined);
+});
+
+test("pushes only selected skill paths from a repository source", async () => {
+  await addSource("team-skills", "https://github.com/team/skills.git", {
+    account: undefined,
+    runGitCommand: async (args) => {
+      await mkdir(args.at(-1), { recursive: true });
+    },
+  });
+
+  const commands = [];
+  const result = await pushSourceChanges("team-skills", ["daily-plan", "review-notes"], {
+    message: "ship skills",
+    runGitCaptureCommand: async (args) => {
+      commands.push(args);
+      return " M daily-plan/SKILL.md\n";
+    },
+    runGitCommand: async (args) => {
+      commands.push(args);
+    },
+  });
+
+  assert.equal(result.pushed, true);
+  assert.deepEqual(commands.map((args) => args.slice(2)), [
+    ["status", "--porcelain", "--", "daily-plan", "review-notes"],
+    ["add", "--", "daily-plan", "review-notes"],
+    ["commit", "-m", "ship skills"],
+    ["push"],
+  ]);
+});
+
+test("push reports no changes without committing", async () => {
+  await addSource("team-skills", "https://github.com/team/skills.git", {
+    account: undefined,
+    runGitCommand: async (args) => {
+      await mkdir(args.at(-1), { recursive: true });
+    },
+  });
+
+  const commands = [];
+  const result = await pushSourceChanges("team-skills", ["daily-plan"], {
+    runGitCaptureCommand: async (args) => {
+      commands.push(args);
+      return "";
+    },
+    runGitCommand: async (args) => {
+      commands.push(args);
+    },
+  });
+
+  assert.equal(result.pushed, false);
+  assert.equal(result.message, "No changes to push");
+  assert.equal(commands.length, 1);
 });
 
 test("reads legacy domain credentials as reusable accounts", async () => {

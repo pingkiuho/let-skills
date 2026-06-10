@@ -1,6 +1,6 @@
 # Project Guide
 
-`letskills` is a local-first CLI for managing personal agent skills. It keeps one canonical skill library on the user's machine, then installs skills into supported agents with symlinks.
+`letskills` is a local-first CLI for managing personal agent skills. Direct local skills can be copied into a managed personal library, while source-backed skills install by linking supported agents directly to the skill folder inside the configured source.
 
 The docs in this directory are the source of truth for how the project is expected to behave. The README is the quick-start entry point; this guide explains the project model in enough detail to support implementation and review work.
 
@@ -12,10 +12,11 @@ The project intentionally stays small:
 
 - local skill folders can be added directly
 - reusable sources can point at HTTPS repositories or local directories
-- skills are copied into one personal library before agent install
-- agent installs are symlinks into that library
-- managed library copies are made read-only after add and update operations
-- manifests record installs and source provenance so links can be repaired and source-backed skills can be refreshed
+- direct local skills are copied into one personal library before agent install
+- source-backed skills use the source folder as the installed source of truth
+- agent installs are symlinks into either the managed library copy or the source skill folder
+- source-backed installs are writable by default, with optional read-only protection for the source skill folder
+- manifests record installs, source provenance, source paths, and read-only policy so links can be repaired and repository source changes can be pushed
 - there is no public registry, telemetry, background update checker, or hosted service
 
 ## Runtime Requirements
@@ -42,8 +43,8 @@ Important files and directories:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.let-skills/skills` | Canonical personal skill library |
-| `~/.let-skills/installs.json` | Manifest of installed skills, target agents, and source provenance |
+| `~/.let-skills/skills` | Managed personal skill library for direct local adds |
+| `~/.let-skills/installs.json` | Manifest of installed skills, target agents, source provenance, source paths, and read-only policy |
 | `~/.let-skills/sources.json` | Configured repository and local-directory sources |
 | `~/.let-skills/sources/<name>` | Local clone for repository sources |
 | `~/.let-skills/.credentials.json` | Saved repository accounts and tokens |
@@ -61,13 +62,15 @@ Skill names must use lowercase letters, numbers, and hyphens:
 my-skill
 ```
 
-When a skill is added, `letskills` copies it into the personal library. If the source file was named `SKILLS.md`, the library copy also gets a normalized `SKILL.md`.
+When a direct local skill is added, `letskills` copies it into the personal library. If the source file was named `SKILLS.md`, the library copy also gets a normalized `SKILL.md`.
 
-Adding a skill that is already in the library reuses the saved copy by default. Passing `--force` replaces the library copy with the provided local folder or source skill. After add and update operations, managed library copies are set read-only. Management commands temporarily make a library copy writable when they need to replace it.
+Adding a direct local skill that is already in the library reuses the saved copy by default. Passing `--force` replaces the library copy with the provided local folder. Managed library copies are set read-only after add operations. Management commands temporarily make a library copy writable when they need to replace it.
+
+When a source-backed skill is installed with `letskills add --source <source-name>`, `letskills` does not copy it into the personal library. It records the configured source, source-relative path, absolute source path, and edit policy, then links agent skill directories directly to that source skill folder. Source-backed skills are writable by default. Passing `--read-only` or choosing `Read-only` in the TUI removes write bits from the shared source skill folder. Passing `--writable` or choosing `Writable` keeps the source skill folder editable. Because all installed agents point at the same source folder, the policy is global for that skill path rather than per agent.
 
 ## Agent Install Model
 
-Agent installs are symlinks from an agent's global skills directory back to the canonical library copy. This means every supported agent sees the same skill content.
+Agent installs are symlinks from an agent's global skills directory back to the resolved installed skill folder. Direct local skills resolve to `~/.let-skills/skills/<skill-name>`. Source-backed skills resolve to the discovered skill folder inside the configured source.
 
 Supported agents:
 
@@ -93,10 +96,12 @@ It records:
 - which skills are installed
 - which agents each skill is installed into
 - which configured source a skill came from, when applicable
+- which source-relative and absolute skill path a source-backed skill uses
+- whether a source-backed skill was installed writable or read-only
 
-The manifest is the repair and update source of truth. `letskills sync` recreates symlinks recorded in the manifest. `letskills update` only refreshes installed skills that still have source provenance and a configured source.
+The manifest is the repair and update source of truth. `letskills sync` recreates symlinks recorded in the manifest. `letskills update` only pulls or rescans configured sources used by installed source-backed skills, then repairs links to the current source skill folders.
 
-`letskills remove` removes recorded agent installs. When no agents are passed, it removes every recorded install for the named skill. Removal refuses to delete an existing target that is not a symlink to the managed library copy.
+`letskills remove` removes recorded agent installs. When no agents are passed, it removes every recorded install for the named skill. Removal refuses to delete an existing target that is not a symlink to the recorded installed skill folder.
 
 ## Source Model
 
@@ -140,11 +145,11 @@ Accounts cannot be removed while any configured source still depends on them.
 
 `letskills add <local-skill-folder...>` copies local skills into the library and installs them into selected agents. In an interactive terminal, it prompts for agents when `--agent` is not provided. In scripts, use `--agent` or `--no-interactive`.
 
-`letskills add --source <source-name>` opens an interactive source browser. The user first selects discovered skills, then selects target agents.
+`letskills add --source <source-name>` opens an interactive source browser. The user first selects discovered skills, then selects target agents, then chooses whether the shared source skill folder should be writable or read-only. Writable is the default.
 
-`letskills install <skill...>` installs existing library skills into agents without copying new source folders.
+`letskills install <skill...>` installs existing managed or source-backed skills into agents without copying new source folders.
 
-`letskills list` shows library skills, installed agents, source provenance, and descriptions.
+`letskills list` shows skills, installed agents, source provenance, edit policy, paths, and descriptions.
 
 `letskills remove <skill...>` removes recorded agent installs. In an interactive terminal, the user can choose target agents. In non-interactive mode with no agents, every recorded install for the skill is removed.
 
@@ -152,7 +157,11 @@ Accounts cannot be removed while any configured source still depends on them.
 
 `letskills sync [--force]` recreates symlinks from the manifest. `--force` can replace existing targets.
 
-`letskills update` refreshes installed source-backed skills. Repository sources are pulled with `git pull --ff-only`; local directory sources are rescanned in place. Local-only installed skills and missing source skills are skipped and reported.
+`letskills update` refreshes installed source-backed skills. Repository sources are pulled with `git pull --ff-only`; local directory sources are rescanned in place; saved symlinks are repaired. Local-only installed skills and missing source skills are skipped and reported.
+
+`letskills push <skill...> [-m <message>]` commits and pushes changes for installed repository source-backed skills. Only the selected skill folder paths are staged. When `-m` is omitted, the commit message is `push updated skills via letskills`. Skills from local directory sources cannot be pushed.
+
+`letskills push --source <source-name> [-m <message>]` commits and pushes changes for all installed repository source-backed skills from that source.
 
 `letskills source` opens the interactive source manager.
 
@@ -196,9 +205,9 @@ When a command is not running in an interactive terminal, it prints normal help 
 | File | Responsibility |
 | --- | --- |
 | `src/cli.js` | Parses arguments, routes commands, coordinates interactive and non-interactive flows |
-| `src/manager.js` | Creates skills, copies library content, manages symlink installs, reads and writes install manifest |
-| `src/sources.js` | Manages repository/local sources, account credentials, Git clone/pull, source discovery |
-| `src/updater.js` | Refreshes installed source-backed skills from configured sources |
+| `src/manager.js` | Creates skills, copies direct local library content, manages source-backed symlink installs, reads and writes install manifest |
+| `src/sources.js` | Manages repository/local sources, account credentials, Git clone/pull/push, source discovery |
+| `src/updater.js` | Pulls or rescans installed source-backed skills from configured sources and repairs links |
 | `src/agents.js` | Defines supported agents, skill directories, and detection |
 | `src/storage.js` | Resolves storage root and legacy storage compatibility |
 | `src/prompt.js` | Implements the full-screen terminal UI |
@@ -214,12 +223,14 @@ Preserve these expectations when changing the project:
 - `letskills` is the canonical command name for new user-facing behavior
 - `let-skills` remains a compatibility alias
 - skill, source, and account names use lowercase letters, numbers, and hyphens
-- the library copy is the canonical installed content
-- agent installs are symlinks to the library copy
+- direct local library copies remain managed installed content
+- source-backed skill folders are the canonical installed content for source installs
+- agent installs are symlinks to the resolved installed skill folder
 - unmanaged agent targets are not removed silently
-- managed library copies become read-only after add and update
-- source provenance controls `letskills update`
+- managed local library copies become read-only after add
+- source provenance and source paths control `letskills update`, `sync`, and `push`
 - local-only skills are not refreshed by `letskills update`
+- repository source pushes stage only selected source skill folder paths
 - repository tokens never appear in clone URLs, command arguments, tables, or normal logs
 - `letskills version update` refuses dirty checkouts
 - docs should describe current behavior from a reader's perspective, not as reverse-engineering notes

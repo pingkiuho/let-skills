@@ -4,7 +4,7 @@ import { updateInstalledSkills } from "../src/updater.js";
 
 test("updates installed repository skills while leaving local and missing skills untouched", async () => {
   const pulled = [];
-  const refreshed = [];
+  let synced = false;
 
   const result = await updateInstalledSkills({
     listSkillsCommand: async () => [
@@ -43,28 +43,20 @@ test("updates installed repository skills while leaving local and missing skills
         path: "/tmp/team-skills/daily-plan",
       },
     ],
-    addSkillsCommand: async (sources, options) => {
-      refreshed.push({ sources, options });
+    syncSkillsCommand: async () => {
+      synced = true;
     },
   });
 
   assert.deepEqual(pulled, ["team-skills"]);
-  assert.deepEqual(refreshed, [
-    {
-      sources: ["/tmp/team-skills/daily-plan"],
-      options: {
-        agents: ["codex", "claude-code"],
-        force: true,
-        source: "team-skills",
-      },
-    },
-  ]);
+  assert.equal(synced, true);
   assert.deepEqual(result, {
     updatedSources: ["team-skills"],
     updatedSkills: [
       {
         skill: "daily-plan",
         source: "team-skills",
+        path: "/tmp/team-skills/daily-plan",
       },
     ],
     skippedSkills: [

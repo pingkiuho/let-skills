@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readlink,
   readFile,
   readdir,
   rm,
@@ -172,9 +173,9 @@ test("adding an existing library skill repairs a missing agent link", async () =
   assert.match(await readFile(path.join(target, "SKILL.md"), "utf8"), /repair-add/);
 });
 
-test("tracks repository provenance and clears it when a local force add replaces the copy", async () => {
+test("source-backed add links agents directly to the source skill", async () => {
   const source = await makeSkill("source-backed");
-  await addSkills([source], { source: "team-skills" });
+  await addSkills([source], { source: "team-skills", sourceRoot: sandbox });
 
   assert.deepEqual(await listSkills(), [
     {
@@ -182,16 +183,54 @@ test("tracks repository provenance and clears it when a local force add replaces
       description: "Test skill source-backed.",
       agents: ["codex"],
       source: "team-skills",
+      path: source,
+      sourcePath: "source-backed",
+      readOnly: false,
     },
   ]);
+  assert.equal(
+    await readlink(path.join(process.env.HOME, ".codex/skills/source-backed")),
+    source,
+  );
+  await writeFile(
+    path.join(process.env.HOME, ".codex/skills/source-backed/SKILL.md"),
+    "---\nname: source-backed\ndescription: Edited source-backed skill.\n---\n",
+  );
+  assert.match(
+    await readFile(path.join(source, "SKILL.md"), "utf8"),
+    /Edited source-backed/,
+  );
 
   await addSkills([source], { force: true });
 
   assert.deepEqual(await listSkills(), [
     {
       name: "source-backed",
-      description: "Test skill source-backed.",
+      description: "Edited source-backed skill.",
       agents: ["codex"],
+    },
+  ]);
+});
+
+test("source-backed add can protect the source folder as read-only", async () => {
+  const source = await makeSkill("protected-source");
+
+  await addSkills([source], { source: "team-skills", sourceRoot: sandbox, readOnly: true });
+
+  assert.equal((await stat(source)).mode & 0o222, 0);
+  await assert.rejects(
+    writeFile(path.join(source, "SKILL.md"), "blocked"),
+    (error) => error?.code === "EACCES" || error?.code === "EPERM",
+  );
+  assert.deepEqual(await listSkills(), [
+    {
+      name: "protected-source",
+      description: "Test skill protected-source.",
+      agents: ["codex"],
+      source: "team-skills",
+      path: source,
+      sourcePath: "protected-source",
+      readOnly: true,
     },
   ]);
 });

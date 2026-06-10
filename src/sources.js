@@ -324,6 +324,10 @@ async function ensureAskpassScript() {
 }
 
 export async function runGit(args, { credential } = {}) {
+  await runGitProcess(args, { credential });
+}
+
+async function gitEnv(credential) {
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
@@ -334,24 +338,97 @@ export async function runGit(args, { credential } = {}) {
     env.SKILLMAN_GIT_USERNAME = credential.username;
     env.SKILLMAN_GIT_TOKEN = credential.token;
   }
+  return env;
+}
 
-  await new Promise((resolve, reject) => {
+async function runGitProcess(args, { credential, capture = false } = {}) {
+  const env = await gitEnv(credential);
+  return new Promise((resolve, reject) => {
     const child = spawn("git", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
     let stderr = "";
-    child.stdout.resume();
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
-        resolve();
+        resolve(capture ? stdout : undefined);
         return;
       }
       const message = stderr.trim() || `git ${args[0]} failed with exit code ${code}.`;
       reject(new Error(credential?.token ? message.replaceAll(credential.token, "[redacted]") : message));
     });
   });
+}
+
+export async function runGitCapture(args, { credential } = {}) {
+  return runGitProcess(args, { credential, capture: true });
+}
+
+async function credentialForSource(source) {
+  return source.account
+    ? await getAccount(source.account)
+    : source.authentication === "public"
+      ? undefined
+      : await getCredential(source.domain);
+}
+
+export async function pushSourceChanges(
+  sourceName,
+  relativePaths,
+  {
+    message = "push updated skills via letskills",
+    runGitCommand = runGit,
+    runGitCaptureCommand = runGitCapture,
+  } = {},
+) {
+  const source = await getSource(sourceName);
+  if (source.type === "directory") {
+    throw new Error(`Source "${sourceName}" is a local directory and cannot be pushed.`);
+  }
+  const uniquePaths = [...new Set(relativePaths)].sort();
+  if (uniquePaths.length === 0) {
+    throw new Error("Choose at least one source skill to push.");
+  }
+  const credential = await credentialForSource(source);
+  const status = await runGitCaptureCommand(
+    ["-C", source.path, "status", "--porcelain", "--", ...uniquePaths],
+    { credential },
+  );
+  if (!status.trim()) {
+    return {
+      source: sourceName,
+      committed: false,
+      pushed: false,
+      message: "No changes to push",
+      paths: uniquePaths,
+    };
+  }
+  await runGitCommand(["-C", source.path, "add", "--", ...uniquePaths], { credential });
+  await runGitCommand(["-C", source.path, "commit", "-m", message], { credential });
+  await runGitCommand(["-C", source.path, "push"], { credential });
+  return {
+    source: sourceName,
+    committed: true,
+    pushed: true,
+    message,
+    paths: uniquePaths,
+  };
+}
+
+export async function updateSource(name, { runGitCommand = runGit } = {}) {
+  const source = await getSource(name);
+  if (source.type === "directory") {
+    await parseLocalDirectory(source.path);
+    return source;
+  }
+  const credential = await credentialForSource(source);
+  await runGitCommand(["-C", source.path, "pull", "--ff-only"], { credential });
+  return source;
 }
 
 export async function listSources() {
@@ -442,21 +519,6 @@ export async function addSource(
 
   registry.sources[name] = source;
   await writeSourcesFile(registry);
-  return source;
-}
-
-export async function updateSource(name, { runGitCommand = runGit } = {}) {
-  const source = await getSource(name);
-  if (source.type === "directory") {
-    await parseLocalDirectory(source.path);
-    return source;
-  }
-  const credential = source.account
-    ? await getAccount(source.account)
-    : source.authentication === "public"
-      ? undefined
-      : await getCredential(source.domain);
-  await runGitCommand(["-C", source.path, "pull", "--ff-only"], { credential });
   return source;
 }
 

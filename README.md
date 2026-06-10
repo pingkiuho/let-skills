@@ -7,9 +7,9 @@ The primary launch command is `letskills`. The older `let-skills` name stays ava
 It is inspired by [`vercel-labs/skills`](https://github.com/vercel-labs/skills), but intentionally keeps a narrower scope:
 
 - local skill folders plus reusable repository or local-directory sources
-- one canonical personal library at `~/.let-skills/skills`
-- symlink installs so every agent sees the same copy
-- managed library copies are locked read-only after install or update
+- source-backed installs link agents directly to the source skill folder
+- direct local adds still keep a managed copy at `~/.let-skills/skills`
+- source-backed skills are writable by default, with read-only protection available during install
 - a small manifest so broken links can be repaired with `sync`
 - no public registry, telemetry, or update checker
 
@@ -37,7 +37,7 @@ letskills source
 # Add a local directory as a reusable source
 letskills source add team-skills ./path/to/skills --no-interactive
 
-# Choose skills from a cloned repository source, then choose install targets
+# Choose skills from a source, then choose install targets and edit policy
 letskills add --source team-skills
 
 # Install the same skill to more agents
@@ -49,8 +49,11 @@ letskills list
 # Repair symlinks from the saved manifest
 letskills sync
 
-# Pull repository sources and refresh every installed source skill
+# Pull repository sources and repair source-backed links
 letskills update
+
+# Commit and push changes made inside installed repository source skills
+letskills push my-workflow
 
 # Choose which recorded agent installs to remove
 letskills remove my-workflow
@@ -65,11 +68,13 @@ letskills remove my-workflow
 letskills init <name> [--dir <path>]
 letskills
 letskills add <local-skill-folder...> [-a, --agent <agent...>] [--force] [--no-interactive]
-letskills add --source <source-name>
+letskills add --source <source-name> [--writable|--read-only]
 letskills install <skill...> [-a, --agent <agent...>] [--force]
 letskills list
 letskills remove <skill...> [-a, --agent <agent...>] [--no-interactive]
 letskills remove --source <source-name>
+letskills push <skill...> [-m <message>]
+letskills push --source <source-name> [-m <message>]
 letskills update
 letskills sync [--force]
 letskills agents
@@ -91,9 +96,9 @@ Running `letskills` with no arguments opens the home page, which links to the ma
 
 For scripts and CI, pass `--agent` or `--no-interactive`. In a terminal, the interactive agent selector only shows detected agents. Non-interactive `add` defaults to the detected Codex agent when available, otherwise the first detected supported agent, and falls back to `codex` if no supported agent is detected yet. Non-interactive `remove` uninstalls from every recorded agent. Use `--agent all` to target every supported agent explicitly.
 
-Running `add` again for a skill already in your personal library reuses the saved copy and installs any missing agent links. Pass `--force` when you want to replace the saved library copy with the local folder contents.
+Running `add` again for a direct local skill already in your personal library reuses the saved copy and installs any missing agent links. Pass `--force` when you want to replace the saved library copy with the local folder contents.
 
-Managed skills in the personal library are automatically set to read-only after `add` and `update`. `letskills` temporarily unlocks them when you run management operations such as `add --force`.
+Direct local skill copies in the personal library are automatically set to read-only after `add`. `letskills` temporarily unlocks them when you run management operations such as `add --force`.
 
 ## Sources
 
@@ -148,7 +153,16 @@ To install from a configured source:
 letskills add --source team-skills
 ```
 
-`letskills` recursively scans the source directory and ignores directory layout. A folder containing `SKILL.md` or `SKILLS.md`, with any letter casing, becomes an available skill. Its parent directory name is used as the skill name. Invalid skill folders are reported and skipped, so valid skills from the same source can still be installed. The TUI first asks which discovered skills to install, then asks which agents should receive them.
+`letskills` recursively scans the source directory and ignores directory layout. A folder containing `SKILL.md` or `SKILLS.md`, with any letter casing, becomes an available skill. Its parent directory name is used as the skill name. Invalid skill folders are reported and skipped, so valid skills from the same source can still be installed. The TUI first asks which discovered skills to install, then asks which agents should receive them, then asks whether the source skill folder should stay writable or be made read-only. Writable is the default.
+
+Source-backed installs do not copy skills into `~/.let-skills/skills`. Agent installs symlink directly to the discovered skill folder inside the configured source. This lets agents that edit their installed skill update the source checkout or local source directory itself. Because all agents point at the same source folder, the writable/read-only policy applies to that source skill folder globally rather than per agent.
+
+To skip the edit policy prompt in the interactive source install flow, pass `--writable` or `--read-only`:
+
+```sh
+letskills add --source team-skills --writable
+letskills add --source team-skills --read-only
+```
 
 To uninstall skills from a configured source:
 
@@ -167,6 +181,8 @@ letskills account add work-gitlab gitlab.example.com glpat-xxxx
 letskills source list
 letskills source update team-skills
 letskills source remove team-skills
+letskills push my-workflow -m "Update workflow skill"
+letskills push --source team-skills
 letskills account list
 letskills account remove work-gitlab
 ```
@@ -180,7 +196,9 @@ letskills version update
 
 `letskills version update` runs `git pull --ff-only` in the local `let-skills` checkout. It refuses to run when the checkout has uncommitted changes, and it only works when `letskills` is running from a Git clone rather than a packaged install.
 
-Run `letskills update` to refresh every configured source used by your currently installed skills. Repository sources are pulled, local directory sources are rescanned in place, and the personal library copies are refreshed. Existing agent installs stay linked to the refreshed copies. Direct local adds that are not tied to a source are left untouched and reported as skipped.
+Run `letskills update` to refresh every configured source used by your currently installed skills. Repository sources are pulled, local directory sources are rescanned in place, and saved agent links are repaired to point at the current source skill folders. Direct local adds that are not tied to a source are left untouched and reported as skipped.
+
+Run `letskills push` when an agent has edited an installed repository source skill and you want to send those changes back upstream. `letskills` stages only the selected skill folder paths, commits with the provided message, and pushes the current source branch. When `-m` is omitted, the commit message is `push updated skills via letskills`. Local directory sources cannot be pushed.
 
 ## Supported Agents
 

@@ -22,6 +22,7 @@ import {
   detectAvailableAgents,
   listSupportedAgents,
 } from "./agents.js";
+import { getSource } from "./sources.js";
 import { storageDir } from "./storage.js";
 
 const MANIFEST_VERSION = 1;
@@ -129,7 +130,14 @@ export function resolveAgents(agents = []) {
 
 async function readManifest() {
   if (!(await exists(manifestPath()))) {
-    return { version: MANIFEST_VERSION, installs: {}, sources: {} };
+    return {
+      version: MANIFEST_VERSION,
+      installs: {},
+      sources: {},
+      paths: {},
+      sourcePaths: {},
+      readOnly: {},
+    };
   }
 
   const manifest = JSON.parse(await readFile(manifestPath(), "utf8"));
@@ -138,6 +146,9 @@ async function readManifest() {
   }
 
   manifest.sources ||= {};
+  manifest.paths ||= {};
+  manifest.sourcePaths ||= {};
+  manifest.readOnly ||= {};
   return manifest;
 }
 
@@ -193,10 +204,19 @@ export async function listSourceSkillNames(sources) {
   return unique(skillNames);
 }
 
-async function linkSkill(skillName, agent, { force = false } = {}) {
-  const source = path.join(skillsDir(), skillName);
+async function resolveSkillTarget(skillName, manifest) {
+  if (manifest.paths?.[skillName]) return manifest.paths[skillName];
+  if (manifest.sources?.[skillName] && manifest.sourcePaths?.[skillName]) {
+    const source = await getSource(manifest.sources[skillName]);
+    return path.join(source.path, manifest.sourcePaths[skillName]);
+  }
+  return path.join(skillsDir(), skillName);
+}
+
+async function linkSkill(skillName, agent, { force = false, sourcePath } = {}) {
+  const source = sourcePath || path.join(skillsDir(), skillName);
   if (!(await exists(source))) {
-    throw new Error(`Skill "${skillName}" is not in your library. Add it first.`);
+    throw new Error(`Skill "${skillName}" is not available at ${source}.`);
   }
 
   const target = path.join(agentSkillsDir(agent), skillName);
@@ -241,7 +261,13 @@ export async function initSkill(name, { destination = process.cwd() } = {}) {
 
 export async function addSkills(
   sources,
-  { agents = [], force = false, source: repositorySource } = {},
+  {
+    agents = [],
+    force = false,
+    source: repositorySource,
+    sourceRoot,
+    readOnly = false,
+  } = {},
 ) {
   if (sources.length === 0) {
     throw new Error("Provide at least one local skill folder.");
@@ -258,7 +284,17 @@ export async function addSkills(
     const metadata = await readSkillMetadata(sourcePath);
     const destination = path.join(skillsDir(), metadata.name);
 
-    if (await exists(destination)) {
+    if (repositorySource) {
+      added.push(metadata.name);
+      skillSources[metadata.name] = {
+        source: repositorySource,
+        path: sourcePath,
+        relativePath: sourceRoot ? path.relative(sourceRoot, sourcePath) || "." : undefined,
+        readOnly,
+      };
+      if (readOnly) await setSkillReadonly(sourcePath);
+      else await setSkillWritable(sourcePath);
+    } else if (await exists(destination)) {
       if (force) {
         await setSkillWritable(destination);
         await rm(destination, { recursive: true, force: true });
@@ -276,9 +312,8 @@ export async function addSkills(
       skillSources[metadata.name] = repositorySource;
     }
 
-    await setSkillReadonly(destination);
+    if (!repositorySource) await setSkillReadonly(destination);
 
-    if (repositorySource) skillSources[metadata.name] = repositorySource;
     skillNames.push(metadata.name);
   }
 
@@ -305,10 +340,11 @@ export async function installSkills(
 
   for (const skillName of unique(skillNames)) {
     assertSkillName(skillName);
-    await readSkillMetadata(path.join(skillsDir(), skillName));
+    const sourcePath = skillSources[skillName]?.path || await resolveSkillTarget(skillName, manifest);
+    await readSkillMetadata(sourcePath);
 
     for (const agent of resolvedAgents) {
-      const target = await linkSkill(skillName, agent, { force });
+      const target = await linkSkill(skillName, agent, { force, sourcePath });
       installed.push({ skill: skillName, agent, target });
     }
 
@@ -318,8 +354,19 @@ export async function installSkills(
     ]).sort();
 
     if (Object.hasOwn(skillSources, skillName)) {
-      if (skillSources[skillName]) manifest.sources[skillName] = skillSources[skillName];
-      else delete manifest.sources[skillName];
+      if (skillSources[skillName]) {
+        manifest.sources[skillName] = skillSources[skillName].source;
+        manifest.paths[skillName] = skillSources[skillName].path;
+        if (skillSources[skillName].relativePath !== undefined) {
+          manifest.sourcePaths[skillName] = skillSources[skillName].relativePath;
+        }
+        manifest.readOnly[skillName] = Boolean(skillSources[skillName].readOnly);
+      } else {
+        delete manifest.sources[skillName];
+        delete manifest.paths[skillName];
+        delete manifest.sourcePaths[skillName];
+        delete manifest.readOnly[skillName];
+      }
     }
   }
 
@@ -345,7 +392,7 @@ export async function removeSkills(skillNames, { agents = [] } = {}) {
       target: path.join(agentSkillsDir(agent), skillName),
     }));
 
-    const source = path.join(skillsDir(), skillName);
+    const source = await resolveSkillTarget(skillName, manifest);
     for (const { target } of targets) {
       if (await entryExists(target)) {
         if (!(await linksTo(target, source))) {
@@ -363,6 +410,12 @@ export async function removeSkills(skillNames, { agents = [] } = {}) {
 
     if (remainingAgents.length === 0) {
       delete manifest.installs[skillName];
+      if (manifest.sources[skillName]) {
+        delete manifest.sources[skillName];
+        delete manifest.paths[skillName];
+        delete manifest.sourcePaths[skillName];
+        delete manifest.readOnly[skillName];
+      }
     } else {
       manifest.installs[skillName] = remainingAgents;
     }
@@ -377,8 +430,9 @@ export async function syncSkills({ force = false } = {}) {
   const synced = [];
 
   for (const [skillName, agents] of Object.entries(manifest.installs)) {
+    const sourcePath = await resolveSkillTarget(skillName, manifest);
     for (const agent of agents) {
-      const target = await linkSkill(skillName, agent, { force });
+      const target = await linkSkill(skillName, agent, { force, sourcePath });
       synced.push({ skill: skillName, agent, target });
     }
   }
@@ -391,7 +445,7 @@ export async function findBrokenInstalls() {
   const broken = [];
 
   for (const [skillName, agents] of Object.entries(manifest.installs)) {
-    const source = path.join(skillsDir(), skillName);
+    const source = await resolveSkillTarget(skillName, manifest);
     if (!(await exists(source))) continue;
 
     for (const agent of agents) {
@@ -408,15 +462,41 @@ export async function findBrokenInstalls() {
 
 export async function listSkills() {
   const manifest = await readManifest();
+  const listed = [];
+  const seen = new Set();
+
+  for (const skillName of Object.keys(manifest.installs)) {
+    try {
+      const skillPath = await resolveSkillTarget(skillName, manifest);
+      const metadata = await readSkillMetadata(skillPath);
+      const sourceName = manifest.sources[metadata.name];
+      seen.add(metadata.name);
+      listed.push({
+        name: metadata.name,
+        description: metadata.description,
+        agents: manifest.installs[metadata.name] || [],
+        ...(sourceName
+          ? {
+            source: sourceName,
+            path: skillPath,
+            sourcePath: manifest.sourcePaths[metadata.name],
+            readOnly: Boolean(manifest.readOnly[metadata.name]),
+          }
+          : {}),
+      });
+    } catch {
+      // Ignore missing or invalid installed records in list output.
+    }
+  }
+
   if (!(await exists(skillsDir()))) {
-    return [];
+    return listed.sort((left, right) => left.name.localeCompare(right.name));
   }
 
   const entries = await readdir(skillsDir(), { withFileTypes: true });
-  const listed = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory() || seen.has(entry.name)) continue;
 
     try {
       const metadata = await readSkillMetadata(path.join(skillsDir(), entry.name));

@@ -136,3 +136,10 @@ test("rejects the removed purge option", async () => {
     /Unknown option "--purge"/,
   );
 });
+
+test("rejects conflicting source edit policy flags", async () => {
+  await assert.rejects(
+    run(["add", "--source", "team-skills", "--read-only", "--writable"]),
+    /Do not pass "--read-only" together with "--writable"/,
+  );
+});

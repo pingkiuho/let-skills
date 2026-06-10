@@ -27,10 +27,12 @@ import {
   credentialsPath,
   discoverSourceSkills,
   discoverSourceSkillsReport,
+  getSource,
   getAccount,
   listAccounts,
   listSources,
   parseRepositoryUrl,
+  pushSourceChanges,
   removeAccount,
   removeSource,
   saveAccount,
@@ -47,11 +49,13 @@ Usage:
   ${CLI_COMMAND} init <name> [--dir <path>]
   ${CLI_COMMAND}
   ${CLI_COMMAND} add <local-skill-folder...> [-a, --agent <agent...>] [--force] [--no-interactive]
-  ${CLI_COMMAND} add --source <source-name>
+  ${CLI_COMMAND} add --source <source-name> [--writable|--read-only]
   ${CLI_COMMAND} install <skill...> [-a, --agent <agent...>] [--force]
   ${CLI_COMMAND} list
   ${CLI_COMMAND} remove <skill...> [-a, --agent <agent...>] [--no-interactive]
   ${CLI_COMMAND} remove --source <source-name>
+  ${CLI_COMMAND} push <skill...> [-m <message>]
+  ${CLI_COMMAND} push --source <source-name> [-m <message>]
   ${CLI_COMMAND} update
   ${CLI_COMMAND} sync [--force]
   ${CLI_COMMAND} agents
@@ -71,13 +75,14 @@ Notes:
   In a terminal, add and remove show an interactive agent selector for detected agents.
   Pass "--no-interactive" to skip prompts. The default add target is the detected Codex agent when available, otherwise the first detected supported agent, falling back to codex.
   Pass "--agent all" to target every supported agent.
-  Personal copies live in ~/${STORAGE_DIRNAME}/skills by default.
+  Source installs link agents directly to the configured source skill folder.
   "${CLI_COMMAND} version update" updates this checkout with "git pull --ff-only".
 `;
 
 function parseArguments(args) {
   const positionals = [];
   const options = { agents: [] };
+  let readOnlyOption;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -112,6 +117,25 @@ function parseArguments(args) {
       index += 1;
     } else if (argument === "--force") {
       options.force = true;
+    } else if (argument === "--read-only") {
+      if (readOnlyOption !== undefined && readOnlyOption !== true) {
+        throw new Error('Do not pass "--read-only" together with "--writable".');
+      }
+      readOnlyOption = true;
+      options.readOnly = true;
+    } else if (argument === "--writable") {
+      if (readOnlyOption !== undefined && readOnlyOption !== false) {
+        throw new Error('Do not pass "--read-only" together with "--writable".');
+      }
+      readOnlyOption = false;
+      options.readOnly = false;
+    } else if (argument === "-m" || argument === "--message") {
+      const message = args[index + 1];
+      if (!message || message.startsWith("-")) {
+        throw new Error(`${argument} requires a commit message.`);
+      }
+      options.message = message;
+      index += 1;
     } else if (argument === "--no-interactive") {
       options.interactive = false;
     } else if (argument.startsWith("-")) {
@@ -170,6 +194,8 @@ function formatSkillRow(skill) {
     skill: skill.name,
     agents: skill.agents.join(", ") || "-",
     source: skill.source || "-",
+    policy: skill.source ? (skill.readOnly ? "read-only" : "writable") : "-",
+    path: skill.path || "-",
     description: skill.description,
   };
 }
@@ -245,6 +271,41 @@ function groupInstallsBySkill(installs) {
   return grouped;
 }
 
+function sourceBackedInstalledSkills(skills) {
+  return skills.filter(({ agents, source, sourcePath }) =>
+    agents.length > 0 && source && sourcePath
+  );
+}
+
+async function pushInstalledSkills(skillNames, options = {}) {
+  const skills = sourceBackedInstalledSkills(await listSkills());
+  const selected = options.source
+    ? skills.filter((skill) => skill.source === options.source)
+    : skills.filter((skill) => skillNames.includes(skill.name));
+  if (selected.length === 0) {
+    throw new Error(options.source
+      ? `No installed repository skills found for source "${options.source}".`
+      : "No installed repository skills matched.");
+  }
+
+  const bySource = new Map();
+  for (const skill of selected) {
+    const grouped = bySource.get(skill.source) || [];
+    grouped.push(skill);
+    bySource.set(skill.source, grouped);
+  }
+
+  const results = [];
+  for (const [sourceName, sourceSkills] of bySource) {
+    results.push(await pushSourceChanges(
+      sourceName,
+      sourceSkills.map(({ sourcePath }) => sourcePath),
+      { message: options.message || "push updated skills via letskills" },
+    ));
+  }
+  return results;
+}
+
 function inspectSourceLocation(value) {
   return /^https:\/\//i.test(value.trim())
     ? parseRepositoryUrl(value)
@@ -312,6 +373,36 @@ async function addInteractively(sources, options, input, output) {
   return true;
 }
 
+async function selectEditPolicy({ input, output, allowBack = true } = {}) {
+  const selected = await selectAgents({
+    welcome: "Welcome. Choose how agents may edit this source skill.",
+    title: "Use which edit policy?",
+    choices: [
+      {
+        id: "writable",
+        name: "Writable",
+        path: "Agents can update the source skill folder",
+      },
+      {
+        id: "read-only",
+        name: "Read-only",
+        path: "Protect the source skill folder from direct edits",
+      },
+    ],
+    showSkillSection: false,
+    singleSelection: true,
+    selectionNoun: "policy",
+    defaultAgents: ["writable"],
+    showBackItem: allowBack,
+    confirmEscapeExit: true,
+    escapeLabel: "exit",
+    input,
+    output,
+  });
+  if (selected === EXIT || selected === BACK) return selected;
+  return selected[0] === "read-only";
+}
+
 async function addLocalSkillInteractively(input, output) {
   const skillPath = await setupSimpleForm({
     title: "Add local skill",
@@ -361,6 +452,7 @@ async function addFromRepositorySource(sourceName, options, input, output) {
     throw new Error('Using "--source" requires an interactive terminal.');
   }
 
+  const source = await getSource(sourceName);
   const { skills: discovered, invalidSkills } = await discoverSourceSkillsReport(sourceName);
   if (discovered.length === 0) {
     const reason = invalidSkills.length > 0
@@ -398,20 +490,47 @@ async function addFromRepositorySource(sourceName, options, input, output) {
       .filter(({ name }) => selectedNames.has(name))
       .map(({ path }) => path);
 
-    const interactiveResult = await addInteractively(
-      selectedFolders,
-      { ...options, allowBack: true },
+    const agentsSelection = await selectAgents({
+      title: "Install the following skill(s) to which agents?",
+      choices: requireAvailableAgentChoices(),
+      skillNames: [...selectedNames].sort(),
+      defaultAgents: defaultAgentSelection(),
+      showBackItem: true,
+      confirmEscapeExit: true,
+      escapeLabel: "exit",
       input,
       output,
-    );
-    if (interactiveResult === EXIT) return EXIT;
-    if (interactiveResult === BACK) continue;
-    if (interactiveResult) return;
+    });
+    if (agentsSelection === EXIT) return EXIT;
+    if (agentsSelection === BACK) continue;
 
-    const { added, reused, installed } = await addSkills(selectedFolders, options);
-    if (added.length > 0) console.log(`Added ${added.join(", ")}`);
-    if (reused.length > 0) console.log(`Reused library copy: ${reused.join(", ")}`);
-    printRows(installed);
+    let readOnly = options.readOnly;
+    if (readOnly === undefined) {
+      const policy = await selectEditPolicy({ input, output, allowBack: true });
+      if (policy === EXIT) return EXIT;
+      if (policy === BACK) continue;
+      readOnly = policy;
+    }
+
+    const result = await addSkills(selectedFolders, {
+      ...options,
+      agents: agentsSelection,
+      source: sourceName,
+      sourceRoot: source.path,
+      readOnly,
+    });
+    await showNotice({
+      title: "Installation complete",
+      lines: [
+        result.added.length > 0 ? `Linked: ${result.added.join(", ")}` : undefined,
+        `Policy: ${readOnly ? "read-only" : "writable"}`,
+        "",
+        ...formatKeyValueLines(result.installed),
+      ].filter((line) => line !== undefined),
+      escapeLabel: "close",
+      input,
+      output,
+    });
     return;
   }
 }
@@ -423,7 +542,7 @@ async function removeFromRepositorySource(sourceName, options, input, output) {
 
   const installed = new Set(
     (await listSkills())
-      .filter(({ agents }) => agents.length > 0)
+      .filter(({ agents, source }) => agents.length > 0 && source === sourceName)
       .map(({ name }) => name),
   );
   const discovered = (await discoverSourceSkills(sourceName))
@@ -784,6 +903,55 @@ async function updateInstalledSkillsInteractively(input, output) {
   });
 }
 
+async function pushSourceSkillsInteractively(input, output) {
+  const skills = sourceBackedInstalledSkills(await listSkills());
+  if (skills.length === 0) {
+    await showNotice({
+      title: "No pushable skills",
+      lines: ["Install a repository source skill first, then come back here to push changes."],
+      escapeLabel: "back",
+      input,
+      output,
+    });
+    return;
+  }
+
+  const result = await selectAgents({
+    welcome: "Welcome. Choose source-backed skill changes to push.",
+    title: "Push which skill(s)?",
+    choices: skills.map((skill) => ({
+      id: skill.name,
+      name: skill.name,
+      path: `${skill.source}  ${skill.sourcePath}`,
+    })),
+    showSkillSection: false,
+    selectionNoun: "skill",
+    showBackItem: true,
+    confirmEscapeExit: true,
+    escapeLabel: "exit",
+    input,
+    output,
+    onConfirm: async (selectedSkills) => {
+      const pushed = await pushInstalledSkills(selectedSkills, {});
+      return {
+        title: "Push complete",
+        summary: pushed.map((push) =>
+          push.pushed
+            ? `Pushed ${push.paths.length} path(s) from ${push.source}`
+            : `${push.source}: ${push.message}`
+        ),
+        rows: pushed.map((push) => ({
+          agent: push.source,
+          target: push.paths.join(", "),
+        })),
+        value: pushed,
+      };
+    },
+  });
+  if (result === EXIT) return EXIT;
+  if (result === BACK) return BACK;
+}
+
 async function syncSkillsInteractively(input, output) {
   const repaired = await syncSkills({});
   await showNotice({
@@ -1017,6 +1185,11 @@ async function runSkillsManager(input, output) {
           name: "Remove installed skills",
           path: installedCount === 0 ? "No installed skills" : `${installedCount} installed skill(s)`,
         },
+        {
+          id: "push-source-skills",
+          name: "Push source skill changes",
+          path: "Commit and push updated repository source skills",
+        },
       ],
       showSkillSection: false,
       singleSelection: true,
@@ -1044,6 +1217,9 @@ async function runSkillsManager(input, output) {
         if (result === BACK) continue;
       } else if (selected === "remove-installed-skills") {
         const result = await removeInstalledSkillsInteractively(input, output);
+        if (result === EXIT) return EXIT;
+      } else if (selected === "push-source-skills") {
+        const result = await pushSourceSkillsInteractively(input, output);
         if (result === EXIT) return EXIT;
       }
     } catch {
@@ -1197,7 +1373,12 @@ async function runHomePage(input, output) {
         {
           id: "update-installed-skills",
           name: "Refresh installed source skills",
-          path: "Pull or rescan configured sources and refresh library copies",
+          path: "Pull or rescan configured sources and repair source links",
+        },
+        {
+          id: "push-source-skills",
+          name: "Push source skill changes",
+          path: "Commit and push updated repository source skills",
         },
         {
           id: "sync-skills",
@@ -1231,6 +1412,9 @@ async function runHomePage(input, output) {
         if (result === EXIT) return EXIT;
       } else if (selected === "update-installed-skills") {
         await updateInstalledSkillsInteractively(input, output);
+      } else if (selected === "push-source-skills") {
+        const result = await pushSourceSkillsInteractively(input, output);
+        if (result === EXIT) return EXIT;
       } else if (selected === "sync-skills") {
         await syncSkillsInteractively(input, output);
       } else if (selected === "list-agents") {
@@ -1435,6 +1619,21 @@ export async function run(argv, { input = process.stdin, output = process.stdout
       return;
     }
     printRows(await removeSkills(positionals, options));
+  } else if (command === "push") {
+    if (options.source) {
+      if (positionals.length > 0) {
+        throw new Error('Do not pass skill names together with "--source".');
+      }
+    } else if (positionals.length === 0) {
+      throw new Error(`Usage: ${CLI_COMMAND} push <skill...> [-m <message>]`);
+    }
+    const pushed = await pushInstalledSkills(positionals, options);
+    printRows(pushed.map((result) => ({
+      source: result.source,
+      paths: result.paths.join(", "),
+      status: result.pushed ? "pushed" : result.message,
+      message: result.message,
+    })));
   } else if (command === "update") {
     const { updatedSources, updatedSkills, skippedSkills } = await updateInstalledSkills();
     if (updatedSources.length > 0) {
