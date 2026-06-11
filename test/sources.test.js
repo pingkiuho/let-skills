@@ -220,6 +220,65 @@ test("push reports no changes without committing", async () => {
   assert.equal(commands.length, 1);
 });
 
+test("pushes selected skill paths from a git local directory source", async () => {
+  const localSource = path.join(sandbox, "workspace-skills");
+  await mkdir(localSource, { recursive: true });
+  await addSource("workspace-skills", localSource);
+
+  const commands = [];
+  const result = await pushSourceChanges("workspace-skills", ["daily-plan"], {
+    message: "ship local skill",
+    runGitCaptureCommand: async (args, options) => {
+      commands.push({ args, options });
+      if (args.includes("rev-parse")) return "true\n";
+      return " M daily-plan/SKILL.md\n";
+    },
+    runGitCommand: async (args, options) => {
+      commands.push({ args, options });
+    },
+  });
+
+  assert.equal(result.pushed, true);
+  assert.deepEqual(commands.map(({ args }) => args.slice(2)), [
+    ["rev-parse", "--is-inside-work-tree"],
+    ["status", "--porcelain", "--", "daily-plan"],
+    ["add", "--", "daily-plan"],
+    ["commit", "-m", "ship local skill"],
+    ["push"],
+  ]);
+  assert.deepEqual(commands.map(({ options }) => options?.credential), [
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ]);
+});
+
+test("refuses to push a local directory source that is not a git repository", async () => {
+  const localSource = path.join(sandbox, "workspace-skills");
+  await mkdir(localSource, { recursive: true });
+  await addSource("workspace-skills", localSource);
+
+  const commands = [];
+  await assert.rejects(
+    pushSourceChanges("workspace-skills", ["daily-plan"], {
+      runGitCaptureCommand: async (args) => {
+        commands.push(args);
+        throw new Error("fatal: not a git repository");
+      },
+      runGitCommand: async (args) => {
+        commands.push(args);
+      },
+    }),
+    /must be a git repository before it can be pushed/,
+  );
+
+  assert.deepEqual(commands.map((args) => args.slice(2)), [
+    ["rev-parse", "--is-inside-work-tree"],
+  ]);
+});
+
 test("reads legacy domain credentials as reusable accounts", async () => {
   await mkdir(path.dirname(credentialsPath()), { recursive: true });
   await writeFile(

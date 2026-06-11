@@ -52,7 +52,7 @@ letskills sync
 # Pull repository sources and repair source-backed links
 letskills update
 
-# Commit and push changes made inside installed repository source skills
+# Commit and push changes made inside installed git-backed source skills
 letskills push my-workflow
 
 # Choose which recorded agent installs to remove
@@ -198,7 +198,7 @@ letskills version update
 
 Run `letskills update` to refresh every configured source used by your currently installed skills. Repository sources are pulled, local directory sources are rescanned in place, and saved agent links are repaired to point at the current source skill folders. Direct local adds that are not tied to a source are left untouched and reported as skipped.
 
-Run `letskills push` when an agent has edited an installed repository source skill and you want to send those changes back upstream. `letskills` stages only the selected skill folder paths, commits with the provided message, and pushes the current source branch. When `-m` is omitted, the commit message is `push updated skills via letskills`. Local directory sources cannot be pushed.
+Run `letskills push` when an agent has edited an installed git-backed source skill and you want to send those changes back upstream. `letskills` stages only the selected skill folder paths, commits with the provided message, and pushes the current source branch. When `-m` is omitted, the commit message is `push updated skills via letskills`. Local directory sources must be Git repositories before they can be pushed.
 
 ## Supported Agents
 

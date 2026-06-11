@@ -159,9 +159,9 @@ Accounts cannot be removed while any configured source still depends on them.
 
 `letskills update` refreshes installed source-backed skills. Repository sources are pulled with `git pull --ff-only`; local directory sources are rescanned in place; saved symlinks are repaired. Local-only installed skills and missing source skills are skipped and reported.
 
-`letskills push <skill...> [-m <message>]` commits and pushes changes for installed repository source-backed skills. Only the selected skill folder paths are staged. When `-m` is omitted, the commit message is `push updated skills via letskills`. Skills from local directory sources cannot be pushed.
+`letskills push <skill...> [-m <message>]` commits and pushes changes for installed git-backed source skills. Only the selected skill folder paths are staged. When `-m` is omitted, the commit message is `push updated skills via letskills`. Skills from local directory sources can be pushed when the source folder is a Git repository.
 
-`letskills push --source <source-name> [-m <message>]` commits and pushes changes for all installed repository source-backed skills from that source.
+`letskills push --source <source-name> [-m <message>]` commits and pushes changes for all installed git-backed source skills from that source.
 
 `letskills source` opens the interactive source manager.
 
@@ -230,7 +230,7 @@ Preserve these expectations when changing the project:
 - managed local library copies become read-only after add
 - source provenance and source paths control `letskills update`, `sync`, and `push`
 - local-only skills are not refreshed by `letskills update`
-- repository source pushes stage only selected source skill folder paths
+- source pushes stage only selected source skill folder paths
 - repository tokens never appear in clone URLs, command arguments, tables, or normal logs
 - `letskills version update` refuses dirty checkouts
 - docs should describe current behavior from a reader's perspective, not as reverse-engineering notes

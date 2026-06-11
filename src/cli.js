@@ -284,8 +284,8 @@ async function pushInstalledSkills(skillNames, options = {}) {
     : skills.filter((skill) => skillNames.includes(skill.name));
   if (selected.length === 0) {
     throw new Error(options.source
-      ? `No installed repository skills found for source "${options.source}".`
-      : "No installed repository skills matched.");
+      ? `No installed source-backed skills found for source "${options.source}".`
+      : "No installed source-backed skills matched.");
   }
 
   const bySource = new Map();
@@ -908,7 +908,7 @@ async function pushSourceSkillsInteractively(input, output) {
   if (skills.length === 0) {
     await showNotice({
       title: "No pushable skills",
-      lines: ["Install a repository source skill first, then come back here to push changes."],
+      lines: ["Install a git-backed source skill first, then come back here to push changes."],
       escapeLabel: "back",
       input,
       output,
@@ -1188,7 +1188,7 @@ async function runSkillsManager(input, output) {
         {
           id: "push-source-skills",
           name: "Push source skill changes",
-          path: "Commit and push updated repository source skills",
+          path: "Commit and push updated git-backed source skills",
         },
       ],
       showSkillSection: false,
@@ -1378,7 +1378,7 @@ async function runHomePage(input, output) {
         {
           id: "push-source-skills",
           name: "Push source skill changes",
-          path: "Commit and push updated repository source skills",
+          path: "Commit and push updated git-backed source skills",
         },
         {
           id: "sync-skills",

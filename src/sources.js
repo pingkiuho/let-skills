@@ -377,6 +377,24 @@ async function credentialForSource(source) {
       : await getCredential(source.domain);
 }
 
+async function assertDirectorySourceIsGitRepository(sourceName, source, runGitCaptureCommand) {
+  try {
+    const isInsideWorkTree = await runGitCaptureCommand([
+      "-C",
+      source.path,
+      "rev-parse",
+      "--is-inside-work-tree",
+    ]);
+    if (isInsideWorkTree.trim() === "true") return;
+  } catch {
+    // Normalize git's implementation-specific error into a source-focused message.
+  }
+
+  throw new Error(
+    `Source "${sourceName}" is a local directory and must be a git repository before it can be pushed.`,
+  );
+}
+
 export async function pushSourceChanges(
   sourceName,
   relativePaths,
@@ -388,13 +406,13 @@ export async function pushSourceChanges(
 ) {
   const source = await getSource(sourceName);
   if (source.type === "directory") {
-    throw new Error(`Source "${sourceName}" is a local directory and cannot be pushed.`);
+    await assertDirectorySourceIsGitRepository(sourceName, source, runGitCaptureCommand);
   }
   const uniquePaths = [...new Set(relativePaths)].sort();
   if (uniquePaths.length === 0) {
     throw new Error("Choose at least one source skill to push.");
   }
-  const credential = await credentialForSource(source);
+  const credential = source.type === "directory" ? undefined : await credentialForSource(source);
   const status = await runGitCaptureCommand(
     ["-C", source.path, "status", "--porcelain", "--", ...uniquePaths],
     { credential },
